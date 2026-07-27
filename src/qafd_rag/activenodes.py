@@ -27,4 +27,5 @@ class ActiveSet(Generic[NodeID]):
             return None
         return random.choice(self._items)
 
-
+    def is_active(self, node: NodeID):
+        return node in self._index

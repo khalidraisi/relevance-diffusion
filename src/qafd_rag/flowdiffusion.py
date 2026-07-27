@@ -17,8 +17,9 @@ class FlowDiffusion(Generic[NodeID]):
         self.confidence = confidence
         self.epsilon = epsilon
         self.step_size = step_size
-        self.weight_func = weight_func
-        self.edge_weights_cache : dict[NodeID, float] = {}
+        self.weight_func = (weight_func or "").lower()
+        self.edge_weights_cache : dict[tuple(NodeID, NodeID), float] = {}
+        self.x: dict[NodeID, float] = {}
 
     def cosine_similarity(self, a: list[float], b: list[float]) -> float:
         a_np = np.asarray(a)
@@ -27,3 +28,106 @@ class FlowDiffusion(Generic[NodeID]):
             return -1 # DNE in this case
         cos_sim = np.dot(a_np, b_np) / (np.linalg.norm(a_np) * np.linalg.norm(b_np))
         return (cos_sim + 1.0) / 2.0
+
+    def get_edge_weight(self, node1: NodeID, node2: NodeID) -> float:
+        nodes = (node1, node2)
+        if nodes in self.edge_weights_cache:
+            return self.edge_weights_cache[nodes]
+
+        static_weight = self.graph.neighbors(node1)[node2]
+
+        cos_sim1e = self.cosine_similarity(self.graph.embedding(node1), self.query_embedding)
+        cos_sim2e = self.cosine_similarity(self.graph.embedding(node2), self.query_embedding)
+
+        if self.weight_func.lower() == "product":
+            edge_weight = static_weight  * cos_sim1e * cos_sim2e
+        elif self.weight_func.lower() == "avg":
+            edge_weight = (static_weight + cos_sim1e + cos_sim2e) / 3.0
+        else:
+            edge_weight = static_weight * (1.0 + ((cos_sim1e + cos_sim2e) / 2.0) * 0.5)
+        
+        self.edge_weights_cache[nodes] = edge_weight
+        return edge_weight
+
+    def initialize(self, alpha: float=50):
+        total = 0
+        for node in self.graph.nodes():
+            total = 0
+            degree = len(self.graph.neighbors(node))
+            self.sink_capacity[node] = max(1, degree)
+            curr_capacity = self.sink_capacity[node]
+        
+        for node in self.graph.nodes():
+            total += self.sink_capacity[node]
+
+        for node in self.graph.nodes():
+            if total == 0: break
+            old_val = self.sink_capacity[node]
+            new_val = 10.0 * old_val / total
+            self.sink_capacity[node] = new_val
+        
+        for node in self.graph.nodes():
+            self.mass[node] = 0.0
+            self.x[node] = 0.0
+
+        total_sink = sum(self.sink_capacity.values())
+        boosted_confidence = 1.0 + self.confidence
+        self.mass[self.source] = alpha * total_sink * boosted_confidence
+
+        self.x[self.source] = 1.0
+
+        for i in range(2):
+            x_new = {}
+            for node, val in self.x.items():
+                if val > 0:
+                    neighbors = list(self.graph.neighbors(node))
+                    if neighbors:
+                        for neighbor in neighbors:
+                            x_new[neighbor] = x_new.get(neighbor, 0.0) + val / len(neighbors)
+
+            x_combined = {}
+            x_combined[self.source] = 1.0
+            for node in set(x_new) | {self.source}:
+                x_combined[node] = (x_combined.get(node, 0.0) + x_new.get(node, 0.0)) / 2.0
+
+            self.x = x_combined
+
+    def push(self, node: str) -> bool:
+        neighbor_weights = self.graph.neighbors(node)
+        if not neighbor_weights: return False
+        w_aq = 0
+        for neighbor_weight in neighbor_weights:
+            w_aq += self.get_edge_weight(node, neighbor_weight)
+        if w_aq == 0: return False
+        excess = self.mass[node] - self.sink_capacity[node]
+        if excess <= 0: return False
+        w_struct = sum(neighbor_weights.values())
+        self.x[node] += self.step_size * excess / (w_struct + 1e-8)
+        self.mass[node] = self.sink_capacity[node]
+        for neighbor_weight in neighbor_weights:
+            self.mass[neighbor_weight] += excess * self.get_edge_weight(node, neighbor_weight) / (w_aq + 1e-8)
+        return True
+
+    def flow_diffusion(self, max_iters: int=500) -> dict[NodeID, float]:
+        excess = self.mass[self.source] - self.sink_capacity[self.source]
+        if excess > 0:
+            self.active.add(self.source)
+        total_excess = sum((max(0.0, self.mass[vertex] - self.sink_capacity[vertex]) for vertex in self.graph.nodes()))
+        iter = 0
+        while total_excess > self.epsilon and self.active.has_active():
+            node = self.active.pick_random()
+            success = self.push(node)
+            if success:
+                self.active.remove(node)
+                for neighbor in self.graph.neighbors(node):
+                    if (self.mass[neighbor] > self.sink_capacity[neighbor]) and not self.active.is_active(neighbor):
+                        self.active.add(neighbor)
+            else:
+                self.active.remove(node)
+            iter += 1
+            if (iter >= max_iters): 
+                print("Does not converge before reaching max iters")
+                break
+            total_excess = sum((max(0.0, self.mass[vertex] - self.sink_capacity[vertex]) for vertex in self.graph.nodes()))
+        
+        return {node: val for node, val in self.x.items() if val > 0}
