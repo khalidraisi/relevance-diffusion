@@ -89,7 +89,7 @@ class FlowDiffusion(Generic[NodeID]):
                         for neighbor in neighbors:
                             x_new[neighbor] = x_new.get(neighbor, 0.0) + val / len(neighbors)
 
-            x_combined = {}
+            x_combined = {node: 0.0 for node in self.graph.nodes()}
             for source in self.sources:
                 x_combined[source] = 1.0 / len(self.sources)
 
