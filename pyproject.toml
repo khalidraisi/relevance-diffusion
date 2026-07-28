@@ -8,8 +8,8 @@ version = "0.1.0"
 description = "Query-aware flow diffusion retrieval over graphs, independent of any specific graph backend."
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
-dependencies = []
+dependencies = ["numpy>=1.24"]
+license = "MIT"
 
-[tool.setuptools.packages.find]
-where = ["src"]
+[tool.setuptools.package-data]
+qafd_rag = ["py.typed"]
