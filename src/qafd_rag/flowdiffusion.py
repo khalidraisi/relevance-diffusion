@@ -3,8 +3,17 @@ from .graphinterface import NodeID, GraphProtocol
 from .activenodes import ActiveSet
 import numpy as np
 
+
+def cosine_similarity(a: list[float], b: list[float]) -> float:
+        a_np = np.asarray(a)
+        b_np = np.asarray(b)
+        if np.linalg.norm(a_np) == 0 or np.linalg.norm(b_np) == 0:
+            return -1 # DNE in this case
+        cos_sim = np.dot(a_np, b_np) / (np.linalg.norm(a_np) * np.linalg.norm(b_np))
+        return (cos_sim + 1.0) / 2.0
+
 class FlowDiffusion(Generic[NodeID]):
-    def __init__(self, graph: GraphProtocol[NodeID], source: NodeID,
+    def __init__(self, graph: GraphProtocol[NodeID], sources: list[NodeID],
      query_embedding: list[float], confidence: float, epsilon: float,
      step_size: float, weight_func: str | None):
 
@@ -12,7 +21,7 @@ class FlowDiffusion(Generic[NodeID]):
         self.sink_capacity : dict[NodeID, float] = {}
         self.active : ActiveSet[NodeID] = ActiveSet()
         self.graph = graph
-        self.source = source
+        self.sources = sources
         self.query_embedding = query_embedding
         self.confidence = confidence
         self.epsilon = epsilon
@@ -21,14 +30,6 @@ class FlowDiffusion(Generic[NodeID]):
         self.edge_weights_cache : dict[tuple(NodeID, NodeID), float] = {}
         self.x: dict[NodeID, float] = {}
 
-    def cosine_similarity(self, a: list[float], b: list[float]) -> float:
-        a_np = np.asarray(a)
-        b_np = np.asarray(b)
-        if np.linalg.norm(a_np) == 0 or np.linalg.norm(b_np) == 0:
-            return -1 # DNE in this case
-        cos_sim = np.dot(a_np, b_np) / (np.linalg.norm(a_np) * np.linalg.norm(b_np))
-        return (cos_sim + 1.0) / 2.0
-
     def get_edge_weight(self, node1: NodeID, node2: NodeID) -> float:
         nodes = (node1, node2)
         if nodes in self.edge_weights_cache:
@@ -36,8 +37,8 @@ class FlowDiffusion(Generic[NodeID]):
 
         static_weight = self.graph.neighbors(node1)[node2]
 
-        cos_sim1e = self.cosine_similarity(self.graph.embedding(node1), self.query_embedding)
-        cos_sim2e = self.cosine_similarity(self.graph.embedding(node2), self.query_embedding)
+        cos_sim1e = cosine_similarity(self.graph.embedding(node1), self.query_embedding)
+        cos_sim2e = cosine_similarity(self.graph.embedding(node2), self.query_embedding)
 
         if self.weight_func.lower() == "product":
             edge_weight = static_weight  * cos_sim1e * cos_sim2e
@@ -72,9 +73,12 @@ class FlowDiffusion(Generic[NodeID]):
 
         total_sink = sum(self.sink_capacity.values())
         boosted_confidence = 1.0 + self.confidence
-        self.mass[self.source] = alpha * total_sink * boosted_confidence
+        seed_mass = (alpha * total_sink * boosted_confidence) / len(self.sources) 
+        for source in self.sources:
+            self.mass[source] = seed_mass
 
-        self.x[self.source] = 1.0
+        for source in self.sources:
+            self.x[source] = 1.0 / len(self.sources)
 
         for i in range(2):
             x_new = {}
@@ -86,8 +90,10 @@ class FlowDiffusion(Generic[NodeID]):
                             x_new[neighbor] = x_new.get(neighbor, 0.0) + val / len(neighbors)
 
             x_combined = {}
-            x_combined[self.source] = 1.0
-            for node in set(x_new) | {self.source}:
+            for source in self.sources:
+                x_combined[source] = 1.0 / len(self.sources)
+
+            for node in set(x_new) | set(self.sources):
                 x_combined[node] = (x_combined.get(node, 0.0) + x_new.get(node, 0.0)) / 2.0
 
             self.x = x_combined
@@ -109,9 +115,11 @@ class FlowDiffusion(Generic[NodeID]):
         return True
 
     def flow_diffusion(self, max_iters: int=500) -> dict[NodeID, float]:
-        excess = self.mass[self.source] - self.sink_capacity[self.source]
-        if excess > 0:
-            self.active.add(self.source)
+        for source in self.sources:
+            excess = self.mass[source] - self.sink_capacity[source]
+            if excess > 0:
+                self.active.add(source)
+        
         total_excess = sum((max(0.0, self.mass[vertex] - self.sink_capacity[vertex]) for vertex in self.graph.nodes()))
         iter = 0
         while total_excess > self.epsilon and self.active.has_active():
@@ -130,4 +138,4 @@ class FlowDiffusion(Generic[NodeID]):
                 break
             total_excess = sum((max(0.0, self.mass[vertex] - self.sink_capacity[vertex]) for vertex in self.graph.nodes()))
         
-        return {node: val for node, val in self.x.items() if val > 0}
+        return {node: val for node, val in self.x.items() if val > 0}    
