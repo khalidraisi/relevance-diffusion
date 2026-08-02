@@ -51,29 +51,16 @@ class FlowDiffusion(Generic[NodeID]):
         return edge_weight
 
     def initialize(self, alpha: float=50):
-        total = 0
         for node in self.graph.nodes():
-            total = 0
-            degree = len(self.graph.neighbors(node))
-            self.sink_capacity[node] = max(1, degree)
-            curr_capacity = self.sink_capacity[node]
-        
-        for node in self.graph.nodes():
-            total += self.sink_capacity[node]
+            weighted_degree = sum(self.graph.neighbors(node).values())
+            self.sink_capacity[node] = max(1.0, weighted_degree)
 
-        for node in self.graph.nodes():
-            if total == 0: break
-            old_val = self.sink_capacity[node]
-            new_val = 10.0 * old_val / total
-            self.sink_capacity[node] = new_val
-        
         for node in self.graph.nodes():
             self.mass[node] = 0.0
             self.x[node] = 0.0
 
-        total_sink = sum(self.sink_capacity.values())
         boosted_confidence = 1.0 + self.confidence
-        seed_mass = (alpha * total_sink * boosted_confidence) / len(self.sources) 
+        seed_mass = (alpha * boosted_confidence) / len(self.sources)
         for source in self.sources:
             self.mass[source] = seed_mass
 
