@@ -13,7 +13,7 @@ def cosine_similarity(a: list[float], b: list[float]) -> float:
         return (cos_sim + 1.0) / 2.0
 
 class FlowDiffusion(Generic[NodeID]):
-    def __init__(self, graph: GraphProtocol[NodeID], sources: list[NodeID],
+    def __init__(self, graph: GraphProtocol[NodeID], sources: list[NodeID] | dict[NodeID, float],
      query_embedding: list[float], confidence: float, epsilon: float,
      step_size: float, weight_func: str | None):
 
@@ -60,12 +60,22 @@ class FlowDiffusion(Generic[NodeID]):
             self.x[node] = 0.0
 
         boosted_confidence = 1.0 + self.confidence
-        seed_mass = (alpha * boosted_confidence) / len(self.sources)
-        for source in self.sources:
-            self.mass[source] = seed_mass
 
-        for source in self.sources:
-            self.x[source] = 1.0 / len(self.sources)
+        # source_shares: node -> fraction of total seed mass it gets. Uniform
+        # split when sources is a plain list (unchanged behavior); proportional
+        # to caller-supplied weight when sources is a dict (e.g. an externally
+        # fused dense+sparse score).
+        if isinstance(self.sources, dict):
+            total_weight = sum(self.sources.values()) or 1.0
+            source_shares = {s: w / total_weight for s, w in self.sources.items()}
+        else:
+            source_shares = {s: 1.0 / len(self.sources) for s in self.sources}
+
+        for source, share in source_shares.items():
+            self.mass[source] = alpha * boosted_confidence * share
+
+        for source, share in source_shares.items():
+            self.x[source] = share
 
         for i in range(2):
             x_new = {}
@@ -77,10 +87,10 @@ class FlowDiffusion(Generic[NodeID]):
                             x_new[neighbor] = x_new.get(neighbor, 0.0) + val / len(neighbors)
 
             x_combined = {node: 0.0 for node in self.graph.nodes()}
-            for source in self.sources:
-                x_combined[source] = 1.0 / len(self.sources)
+            for source, share in source_shares.items():
+                x_combined[source] = share
 
-            for node in set(x_new) | set(self.sources):
+            for node in set(x_new) | set(source_shares):
                 x_combined[node] = (x_combined.get(node, 0.0) + x_new.get(node, 0.0)) / 2.0
 
             self.x = x_combined

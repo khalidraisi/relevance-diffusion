@@ -7,9 +7,10 @@ def retrieve(
     graph: GraphProtocol[NodeID], query: str, keyword_extractor: KeywordExtractor,
     embed_fn: Callable[[str], list[float]], n_seeds: int, confidence: float,
     epsilon: float, step_size: float, weight_func: str | None, alpha: float = 50,
-    max_iters: int = 500,) -> list[tuple[NodeID, float]]:
+    max_iters: int = 500, seed_weights: dict[NodeID, float] | None = None,
+    ) -> list[tuple[NodeID, float]]:
 
-    seeds = select_seeds(graph, query, keyword_extractor, embed_fn, n_seeds)
+    seeds = seed_weights if seed_weights is not None else select_seeds(graph, query, keyword_extractor, embed_fn, n_seeds)
     query_embedding = embed_fn(query)
     flowdiffusion = FlowDiffusion(graph, seeds, query_embedding, confidence, epsilon, step_size, weight_func)
     flowdiffusion.initialize(alpha)
